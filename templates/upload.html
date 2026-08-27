@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Upload PDF</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; }
+      label { display: block; margin: 0.75rem 0 0.35rem; font-weight: bold; }
+      input[type=text], input[type=file] { display: block; margin-bottom: 0.5rem; }
+      .hint { color: #666; margin-bottom: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Upload PDF to ingest</h1>
+    <p class="hint">Upload up to 2 PDF files at a time. The same user data will be attached to each selected file.</p>
+    <form action="/upload" enctype="multipart/form-data" method="post">
+      <label for="user-name">User Name</label>
+      <input id="user-name" name="user_name" type="text" placeholder="Enter user name" required />
+      <label for="user-id">User ID</label>
+      <input id="user-id" name="user_id" type="text" placeholder="Enter user ID" required />
+      <label for="files">PDF Files</label>
+      <input id="files" name="files" type="file" accept="application/pdf" multiple required />
+      <input type="submit" value="Upload" />
+    </form>
+  </body>
+</html>

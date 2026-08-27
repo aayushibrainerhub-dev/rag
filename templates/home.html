@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RAG Document Upload and Chat</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; }
+      h1 { margin-bottom: 0.5rem; }
+      section { margin-bottom: 2rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
+      label { display: block; margin-bottom: 0.5rem; font-weight: bold; }
+      input[type=text] { width: 100%; max-width: 640px; padding: 0.5rem; margin-bottom: 1rem; }
+      select { width: 100%; max-width: 640px; padding: 0.5rem; margin-bottom: 1rem; }
+      button { padding: 0.75rem 1.25rem; font-size: 1rem; }
+      #chat-result { margin-top: 1rem; white-space: pre-wrap; background: #f7f7f7; padding: 1rem; border-radius: 6px; border: 1px solid #ccc; }
+      .status { margin-top: 0.75rem; color: #333; }
+      .hint { margin-top: -0.5rem; margin-bottom: 1rem; color: #666; font-size: 0.95rem; }
+    </style>
+  </head>
+  <body>
+    <h1>RAG Document Upload and Chat</h1>
+    <section>
+      <h2>Upload PDF</h2>
+      <p>Upload PDF files to ingest them into the RAG document store.</p>
+      <form id="upload-form" action="/upload" enctype="multipart/form-data" method="post">
+        <label for="user-name">User Name</label>
+        <input id="user-name" name="user_name" type="text" placeholder="Enter user name" required />
+        <label for="user-id">User ID</label>
+        <input id="user-id" name="user_id" type="text" placeholder="Enter user ID" required />
+        <label for="files">PDF Files</label>
+        <input id="files" name="files" type="file" accept="application/pdf" multiple required />
+        <div class="hint">Select up to 2 PDF files for one upload.</div>
+        <button type="submit">Upload PDF</button>
+      </form>
+      <div id="upload-status" class="status"></div>
+    </section>
+    <section>
+      <h2>Ask a Question</h2>
+      <p>Ask a question and the app will return an answer based on the uploaded documents.</p>
+      <form id="chat-form">
+        <label for="user-select">Select User ID</label>
+        <select id="user-select"></select>
+        <label for="question">Question</label>
+        <input id="question" type="text" placeholder="Enter your question" required />
+        <button type="submit">Ask</button>
+      </form>
+      <div id="chat-result">No answer yet.</div>
+    </section>
+    <script>
+      const uploadForm = document.getElementById('upload-form');
+      const uploadStatus = document.getElementById('upload-status');
+      const chatForm = document.getElementById('chat-form');
+      const chatResult = document.getElementById('chat-result');
+      const userSelect = document.getElementById('user-select');
+      const userNameInput = document.getElementById('user-name');
+      const userIdInput = document.getElementById('user-id');
+
+      let sessionId = localStorage.getItem('rag_session_id');
+      let uploadId = localStorage.getItem('rag_upload_id');
+      let userName = localStorage.getItem('rag_user_name');
+      let userId = localStorage.getItem('rag_user_id');
+      let userProfiles = {};
+
+      try {
+        userProfiles = JSON.parse(localStorage.getItem('rag_user_profiles') || '{}') || {};
+      } catch (error) {
+        userProfiles = {};
+      }
+
+      function saveUserProfiles() {
+        localStorage.setItem('rag_user_profiles', JSON.stringify(userProfiles));
+      }
+
+      function upsertUserProfile(userOption) {
+        if (!userOption || !userOption.user_id) {
+          return;
+        }
+        const existing = userProfiles[userOption.user_id] || {};
+        userProfiles[userOption.user_id] = {
+          user_id: userOption.user_id,
+          user_name: userOption.user_name || existing.user_name || '',
+        };
+        saveUserProfiles();
+      }
+
+      function getAvailableUsers() {
+        return Object.values(userProfiles);
+      }
+
+      function renderUserDropdown(selectedUserId = null) {
+        const users = getAvailableUsers();
+        userSelect.innerHTML = '';
+
+        if (!users.length) {
+          const placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.textContent = 'No uploaded users yet';
+          userSelect.appendChild(placeholder);
+          userSelect.disabled = true;
+          return;
+        }
+
+        userSelect.disabled = false;
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Choose a user ID';
+        userSelect.appendChild(placeholder);
+
+        users.forEach((user) => {
+          const option = document.createElement('option');
+          option.value = user.user_id;
+          option.textContent = user.user_name ? `${user.user_name} (${user.user_id})` : user.user_id;
+          userSelect.appendChild(option);
+        });
+
+        const preferredUserId = selectedUserId || userId || localStorage.getItem('rag_selected_user_id') || '';
+        if (preferredUserId && userProfiles[preferredUserId]) {
+          userSelect.value = preferredUserId;
+        } else if (users[0]) {
+          userSelect.value = users[0].user_id;
+        }
+
+        if (userSelect.value) {
+          localStorage.setItem('rag_selected_user_id', userSelect.value);
+          userId = userSelect.value;
+          userName = userProfiles[userId]?.user_name || userName || '';
+        }
+      }
+
+      if (userNameInput && userName) {
+        userNameInput.value = userName;
+      }
+      if (userIdInput && userId) {
+        userIdInput.value = userId;
+      }
+
+      renderUserDropdown();
+
+      userSelect.addEventListener('change', () => {
+        if (!userSelect.value) {
+          return;
+        }
+        userId = userSelect.value;
+        userName = userProfiles[userId]?.user_name || userName || '';
+        localStorage.setItem('rag_selected_user_id', userId);
+        localStorage.setItem('rag_user_id', userId);
+        localStorage.setItem('rag_user_name', userName);
+        if (userNameInput) {
+          userNameInput.value = userName;
+        }
+        if (userIdInput) {
+          userIdInput.value = userId;
+        }
+      });
+
+      uploadForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const formData = new FormData(uploadForm);
+        uploadStatus.textContent = 'Uploading...';
+
+        const fileInput = uploadForm.querySelector('input[type="file"]');
+        const selectedFiles = Array.from(fileInput?.files || []);
+        if (!selectedFiles.length) {
+          uploadStatus.textContent = 'Please select at least one PDF file.';
+          return;
+        }
+        if (selectedFiles.length > 2) {
+          uploadStatus.textContent = 'Please upload no more than 2 files at a time.';
+          return;
+        }
+
+        const submittedUserName = String(formData.get('user_name') || '').trim();
+        const submittedUserId = String(formData.get('user_id') || '').trim();
+
+        const headers = { 'Accept': 'application/json' };
+        if (sessionId) {
+          headers['X-Session-ID'] = sessionId;
+        }
+
+        try {
+          const response = await fetch('/upload', {
+            method: 'POST',
+            headers,
+            body: formData,
+          });
+          const result = await response.json();
+          if (response.ok && result.reloaded !== false) {
+            if (result.session_id) {
+              sessionId = result.session_id;
+              localStorage.setItem('rag_session_id', sessionId);
+            }
+            if (result.upload_id) {
+              uploadId = result.upload_id;
+              localStorage.setItem('rag_upload_id', uploadId);
+            }
+            if (result.user_name) {
+              userName = result.user_name;
+              localStorage.setItem('rag_user_name', userName);
+            } else if (submittedUserName) {
+              userName = submittedUserName;
+              localStorage.setItem('rag_user_name', userName);
+            }
+            if (result.user_id) {
+              userId = result.user_id;
+              localStorage.setItem('rag_user_id', userId);
+            } else if (submittedUserId) {
+              userId = submittedUserId;
+              localStorage.setItem('rag_user_id', userId);
+            }
+            const uploadedNames = Array.isArray(result.filename)
+              ? result.filename.join(', ')
+              : (result.filename || selectedFiles.map((file) => file.name).join(', '));
+            uploadStatus.textContent = `Uploaded ${uploadedNames}. User: ${userName || submittedUserName} (${userId || submittedUserId}). Session: ${sessionId}. Files: ${result.uploaded_files?.join(', ') || uploadedNames}`;
+            if (Array.isArray(result.available_users)) {
+              result.available_users.forEach(upsertUserProfile);
+              renderUserDropdown(userId);
+            } else {
+              upsertUserProfile({ user_id: userId, user_name: userName || submittedUserName });
+              renderUserDropdown(userId);
+            }
+          } else if (result.error) {
+            uploadStatus.textContent = result.error;
+          } else {
+            uploadStatus.textContent = `Uploaded ${Array.isArray(result.filename) ? result.filename.join(', ') : result.filename}, but reload failed.`;
+          }
+        } catch (error) {
+          uploadStatus.textContent = 'Upload failed: ' + error;
+        }
+      });
+
+      chatForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const question = document.getElementById('question').value.trim();
+        if (!question) {
+          chatResult.textContent = 'Please enter a question.';
+          return;
+        }
+        chatResult.textContent = 'Thinking...';
+
+        const payload = { question };
+        if (sessionId) payload.session_id = sessionId;
+        const selectedUserId = userSelect.value || userId || '';
+        const selectedUserName = userProfiles[selectedUserId]?.user_name || userName || '';
+        if (uploadId) payload.upload_id = uploadId;
+        if (selectedUserId) payload.user_id = selectedUserId;
+        if (selectedUserName) payload.user_name = selectedUserName;
+
+        try {
+          const response = await fetch('/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = await response.json();
+          if (response.ok) {
+            if (data.session_id) {
+              sessionId = data.session_id;
+              localStorage.setItem('rag_session_id', sessionId);
+            }
+            if (data.upload_id) {
+              uploadId = data.upload_id;
+              localStorage.setItem('rag_upload_id', uploadId);
+            }
+            if (data.user_name) {
+              userName = data.user_name;
+              localStorage.setItem('rag_user_name', userName);
+            }
+            if (data.user_id) {
+              userId = data.user_id;
+              localStorage.setItem('rag_user_id', userId);
+            }
+            if (Array.isArray(data.available_users)) {
+              data.available_users.forEach(upsertUserProfile);
+              renderUserDropdown(data.user_id || userId);
+            }
+            const uploadedFiles = data.uploaded_files?.length ? `\nUploaded files: ${data.uploaded_files.join(', ')}` : '';
+            chatResult.textContent = `Answer:\n${data.answer}\n\nSources:\n${(data.sources || []).join('\n')}${uploadedFiles}\nSession: ${data.session_id}\nUser: ${data.user_name || userName || ''} (${data.user_id || userId || ''})`;
+          } else {
+            chatResult.textContent = `Error: ${data.detail || JSON.stringify(data)}`;
+          }
+        } catch (error) {
+          chatResult.textContent = 'Chat request failed: ' + error;
+        }
+      });
+    </script>
+  </body>
+</html>
